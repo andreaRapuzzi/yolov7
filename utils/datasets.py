@@ -567,6 +567,9 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             if labels.size:  # normalized xywh to pixel xyxy format
                 labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
 
+        if len(img.shape) == 2:
+            img = np.expand_dims(img, -1)
+
         if self.augment:
             # Augment imagespace
             if not mosaic:
@@ -626,7 +629,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
         img = np.ascontiguousarray(img)
 
-        return torch.from_numpy(img), labels_out, self.img_files[index], shapes
+        return torch.from_numpy(img.copy()), labels_out, self.img_files[index], shapes
 
     @staticmethod
     def collate_fn(batch):
@@ -669,29 +672,44 @@ def load_image(self, index):
     if img is None:  # not cached
         path = self.img_files[index]
         img = cv2.imread(path)  # BGR
+
+        if len(img.shape) == 3:
+            img = img[:, :, 0:1]
+
         assert img is not None, 'Image Not Found ' + path
         h0, w0 = img.shape[:2]  # orig hw
         r = self.img_size / max(h0, w0)  # resize image to img_size
         if r != 1:  # always resize down, only resize up if training with augmentation
             interp = cv2.INTER_AREA if r < 1 and not self.augment else cv2.INTER_LINEAR
             img = cv2.resize(img, (int(w0 * r), int(h0 * r)), interpolation=interp)
+
+        if len(img.shape) == 2:
+            img = np.expand_dims(img, -1)
+
         return img, (h0, w0), img.shape[:2]  # img, hw_original, hw_resized
     else:
         return self.imgs[index], self.img_hw0[index], self.img_hw[index]  # img, hw_original, hw_resized
 
 
 def augment_hsv(img, hgain=0.5, sgain=0.5, vgain=0.5):
-    r = np.random.uniform(-1, 1, 3) * [hgain, sgain, vgain] + 1  # random gains
-    hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
-    dtype = img.dtype  # uint8
+    if img.shape[2] == 1:
+        r = np.random.uniform(-1, 1, 1) * [vgain] + 1  # random gains
 
-    x = np.arange(0, 256, dtype=np.int16)
-    lut_hue = ((x * r[0]) % 180).astype(dtype)
-    lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
-    lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
+        dtype = img.dtype  # uint8
+        img[:, :, :] = np.clip(img[:, :, :] * r, 0, 255).astype(dtype)
 
-    img_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val))).astype(dtype)
-    cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR, dst=img)  # no return needed
+    else:
+        r = np.random.uniform(-1, 1, 3) * [hgain, sgain, vgain] + 1  # random gains
+        hue, sat, val = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
+        dtype = img.dtype  # uint8
+
+        x = np.arange(0, 256, dtype=np.int16)
+        lut_hue = ((x * r[0]) % 180).astype(dtype)
+        lut_sat = np.clip(x * r[1], 0, 255).astype(dtype)
+        lut_val = np.clip(x * r[2], 0, 255).astype(dtype)
+
+        img_hsv = cv2.merge((cv2.LUT(hue, lut_hue), cv2.LUT(sat, lut_sat), cv2.LUT(val, lut_val))).astype(dtype)
+        cv2.cvtColor(img_hsv, cv2.COLOR_HSV2BGR, dst=img)  # no return needed
 
 
 def hist_equalize(img, clahe=True, bgr=False):
@@ -1200,7 +1218,7 @@ def pastein(image, labels, sample_labels, sample_images, sample_masks):
                 r_image = cv2.resize(sample_images[sel_ind], (r_w, r_h))
                 temp_crop = image[ymin:ymin+r_h, xmin:xmin+r_w]
                 m_ind = r_mask > 0
-                if m_ind.astype(np.int32).sum() > 60:
+                if m_ind.astype(np.int).sum() > 60:
                     temp_crop[m_ind] = r_image[m_ind]
                     #print(sample_labels[sel_ind])
                     #print(sample_images[sel_ind].shape)
